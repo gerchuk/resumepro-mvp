@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 import os, json, httpx
-from prompts import RESUME_PARSER_PROMPT
+from app.prompts import RESUME_PARSER_PROMPT
 
 router = APIRouter()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

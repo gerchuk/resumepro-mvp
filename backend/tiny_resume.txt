@@ -1,0 +1,3 @@
+John Doe
+Junior Developer
+- Built a small tool that saved 2 hours/week

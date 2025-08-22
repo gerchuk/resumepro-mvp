@@ -1,0 +1,102 @@
+from fastapi import APIRouter, UploadFile, File, HTTPException
+from pydantic import BaseModel
+from typing import List, Dict, Any
+import os, json, re
+
+router = APIRouter()
+
+# --- Optional OpenAI call (will be skipped if key missing or API fails) ---
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+# Simple heuristic fallback parser (no OpenAI needed)
+def heuristic_parse(text: str) -> Dict[str, Any]:
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    full_name = lines[0] if lines else ""
+    summary = ""
+    work_experience: List[Dict[str, Any]] = []
+    skills: List[str] = []
+    education: List[Dict[str, str]] = []
+    certifications: List[str] = []
+
+    # crude title/summary guess from 2nd line
+    if len(lines) >= 2:
+        summary = lines[1]
+
+    # bullets as achievements
+    achievements = []
+    for l in lines[2:]:
+        if l.startswith(("-", "•", "*")):
+            achievements.append(l.lstrip("-•* ").strip())
+
+    if achievements:
+        work_experience.append({
+            "job_title": "",
+            "company": "",
+            "start_date": "",
+            "end_date": "",
+            "achievements": achievements
+        })
+
+    return {
+        "full_name": full_name,
+        "contact_info": "",
+        "summary": summary,
+        "work_experience": work_experience,
+        "education": education,
+        "skills": skills,
+        "certifications": certifications
+    }
+
+class ParseResult(BaseModel):
+    parsed: Dict[str, Any]
+
+@router.post("/parse", response_model=ParseResult)
+async def parse_resume(file: UploadFile = File(...)):
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8", errors="ignore")
+    except Exception:
+        text = raw.decode("latin-1", errors="ignore")
+
+    # Try OpenAI first if key is present; on any failure, fallback to heuristic
+    if OPENAI_API_KEY:
+        import httpx
+        from app.prompts import RESUME_PARSER_PROMPT  # keep your prompt if available
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "model": "gpt-5",
+            "messages": [
+                {"role": "system", "content": RESUME_PARSER_PROMPT if 'RESUME_PARSER_PROMPT' in globals() else
+                 "Extract resume JSON with fields: full_name, contact_info, summary, work_experience (array of {job_title, company, start_date, end_date, achievements[]}), education, skills, certifications. Return ONLY JSON."},
+                {"role": "user", "content": text}
+            ],
+            "temperature": 0.0
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.post(OPENAI_URL, json=payload, headers=headers)
+                if r.status_code == 200:
+                    data = r.json()
+                    content = data["choices"][0]["message"]["content"]
+                    # try safe JSON load with simple guard
+                    try:
+                        parsed = json.loads(content)
+                    except Exception:
+                        m = re.search(r"\{[\s\S]*\}$", content.strip())
+                        if not m:
+                            raise ValueError("Model did not return JSON")
+                        parsed = json.loads(m.group(0))
+                    return {"parsed": parsed}
+                else:
+                    # Non-200 (e.g., 429): fall back
+                    parsed = heuristic_parse(text)
+                    return {"parsed": parsed}
+        except Exception:
+            # Network or parsing error: fall back
+            parsed = heuristic_parse(text)
+            return {"parsed": parsed}
+    else:
+        # No API key: fall back
+        parsed = heuristic_parse(text)
+        return {"parsed": parsed}
