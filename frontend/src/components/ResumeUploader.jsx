@@ -1,8 +1,3 @@
-# (⛔️ DO NOT copy this comment line!)
-cd ~/Downloads/resumepro-mvp
-
-# Overwrite the component with the version that includes both panels
-cat > frontend/src/components/ResumeUploader.jsx <<'JS'
 import React, { useState } from "react";
 import { API_BASE_URL } from "../lib/api";
 
@@ -30,7 +25,7 @@ export default function ResumeUploader() {
       if (!res.ok) throw new Error("Parse failed");
       const data = await res.json();
       setParsed(data.parsed);
-    } catch (e) {
+    } catch {
       setError("Upload/Parse failed");
     } finally {
       setLoading(false);
@@ -49,12 +44,12 @@ export default function ResumeUploader() {
           job_title: clJobTitle || undefined,
           company: clCompany || undefined,
           job_description: clJD || undefined
-          })
+        })
       });
       if (!res.ok) throw new Error("Rewrite failed");
       const data = await res.json();
       setRewrite(data);
-    } catch (e) {
+    } catch {
       setError("Rewrite failed");
     } finally {
       setLoading(false);
@@ -79,7 +74,7 @@ export default function ResumeUploader() {
       if (!res.ok) throw new Error("Cover letter failed");
       const data = await res.json();
       setCoverLetter(data.cover_letter);
-    } catch (e) {
+    } catch {
       setError("Cover letter failed");
     } finally {
       setLoading(false);
@@ -103,6 +98,7 @@ export default function ResumeUploader() {
         <div className="p-4 border rounded space-y-3">
           <h2 className="font-semibold">Parsed JSON</h2>
           <pre className="bg-gray-100 p-3 overflow-x-auto text-sm">{JSON.stringify(parsed, null, 2)}</pre>
+
           <div className="grid md:grid-cols-2 gap-4">
             <div className="p-3 border rounded">
               <h3 className="font-semibold mb-2">Rewrite Resume</h3>
