@@ -6,6 +6,7 @@ import os, json, re
 router = APIRouter()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 # ---------------- Heuristic parsing helpers (no-OpenAI fallback) ----------------
@@ -157,7 +158,7 @@ async def gpt_chat(messages: List[Dict[str, str]], temperature: float = 0.2) -> 
     try:
         import httpx
         headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-        payload = {"model": "gpt-5", "messages": messages, "temperature": temperature}
+        payload = {"model": OPENAI_MODEL, "messages": messages, "temperature": temperature}
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(OPENAI_URL, json=payload, headers=headers)
             if r.status_code != 200:
