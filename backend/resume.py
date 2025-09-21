@@ -1,13 +1,14 @@
 from fastapi import APIRouter, UploadFile, File
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
-import os, json, re
+import os, json, re, tempfile, pathlib
 
 router = APIRouter()
 
+# Read model & key from env (model defaults to widely-available one)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_URL     = "https://api.openai.com/v1/chat/completions"
 
 # ---------------- Heuristic parsing helpers (no-OpenAI fallback) ----------------
 SECTION_HEADERS = {
@@ -132,7 +133,7 @@ class RewriteRequest(BaseModel):
     company: Optional[str] = None
     job_description: Optional[str] = None
     tone: Optional[str] = "professional"
-    seniority: Optional[str] = None  # e.g., "senior", "manager", etc.
+    seniority: Optional[str] = None
 
 class RewriteResponse(BaseModel):
     rewritten: Dict[str, Any]
@@ -151,7 +152,7 @@ class CoverLetterResponse(BaseModel):
     cover_letter: str
     used_openai: bool
 
-# ---------------- Helpers ----------------
+# ---------------- Low-level helpers ----------------
 async def gpt_chat(messages: List[Dict[str, str]], temperature: float = 0.2) -> Optional[str]:
     if not OPENAI_API_KEY:
         return None
@@ -180,7 +181,9 @@ def render_resume_text(parsed: Dict[str, Any]) -> str:
         lines += ["", "SKILLS", ", ".join(parsed["skills"])]
     for edu in parsed.get("education", []):
         parts = [edu.get("degree"), edu.get("institution"), edu.get("year")]
-        lines += ["", "EDUCATION", " — ".join([p for p in parts if p])]
+        pretty = " — ".join([p for p in parts if p])
+        if pretty:
+            lines += ["", "EDUCATION", pretty]
     for exp in parsed.get("work_experience", []):
         header = " — ".join([x for x in [exp.get("job_title"), exp.get("company")] if x])
         if header:
@@ -190,7 +193,6 @@ def render_resume_text(parsed: Dict[str, Any]) -> str:
     return "\n".join([l for l in lines if l is not None])
 
 def local_rewrite(parsed: Dict[str, Any]) -> Dict[str, Any]:
-    # Very basic: title-case name, trim long bullets, ensure bullets start with verb-y style.
     out = json.loads(json.dumps(parsed))  # deep copy
     if out.get("full_name"):
         out["full_name"] = " ".join([w.capitalize() for w in out["full_name"].split()])
@@ -206,14 +208,57 @@ def local_rewrite(parsed: Dict[str, Any]) -> Dict[str, Any]:
         exp["achievements"] = new_ach
     return out
 
+# ---------------- New: robust text extraction for .txt / .docx / .pdf ----------------
+def extract_text_from_upload(upload: UploadFile) -> str:
+    # Prefer file extension, fall back to content-type sniffing
+    filename = (upload.filename or "").lower()
+    suffix = pathlib.Path(filename).suffix
+
+    # Save to a secure temp file (some parsers require a file path)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix or ".bin") as tmp:
+        raw = upload.file.read()
+        tmp.write(raw)
+        tmp_path = tmp.name
+
+    try:
+        if suffix == ".txt":
+            try:
+                return raw.decode("utf-8", errors="ignore")
+            except Exception:
+                return raw.decode("latin-1", errors="ignore")
+
+        if suffix == ".docx":
+            from docx import Document
+            doc = Document(tmp_path)
+            return "\n".join(p.text for p in doc.paragraphs if p.text)
+
+        if suffix == ".pdf":
+            import pdfplumber
+            text_parts: List[str] = []
+            with pdfplumber.open(tmp_path) as pdf:
+                for page in pdf.pages:
+                    t = page.extract_text() or ""
+                    if t:
+                        text_parts.append(t)
+            return "\n".join(text_parts)
+
+        # Unknown: best-effort decode as text
+        try:
+            return raw.decode("utf-8", errors="ignore")
+        except Exception:
+            return raw.decode("latin-1", errors="ignore")
+
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
 # ---------------- Routes ----------------
 @router.post("/parse", response_model=ParseResult)
 async def parse_resume(file: UploadFile = File(...)):
-    raw = await file.read()
-    try:
-        text = raw.decode("utf-8", errors="ignore")
-    except Exception:
-        text = raw.decode("latin-1", errors="ignore")
+    # Extract readable text from .txt / .docx / .pdf (and unknowns best-effort)
+    text = extract_text_from_upload(file)
 
     # Try OpenAI first; fall back to heuristic
     if OPENAI_API_KEY:
@@ -300,7 +345,6 @@ async def cover_letter(body: CoverLetterRequest):
         temperature=0.5
     )
     if content:
-        # trim to max words if model exceeds
         if body.max_words:
             words = content.split()
             if len(words) > body.max_words:
