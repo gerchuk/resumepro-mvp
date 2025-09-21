@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { API_BASE_URL } from "../lib/api";
-import { jsPDF } from "jspdf";
+
 
 export default function ResumeUploader() {
   const [file, setFile] = useState(null);
@@ -14,51 +14,54 @@ export default function ResumeUploader() {
   const [error, setError] = useState("");
 
   // ---------- helpers: PDF exporters ----------
-  const downloadResumePDF = () => {
-    const text =
-      rewrite?.resume_text ||
-      (rewrite?.rewritten ? JSON.stringify(rewrite.rewritten, null, 2) : null);
+  // ---------- helpers: PDF exporters ----------
+const downloadResumePDF = async () => {
+  const text =
+    rewrite?.resume_text ||
+    (rewrite?.rewritten ? JSON.stringify(rewrite.rewritten, null, 2) : null);
 
-    if (!text) {
-      alert("Please click 'Rewrite Resume' first.");
-      return;
+  if (!text) {
+    alert("Please click 'Rewrite Resume' first.");
+    return;
+  }
+  const { jsPDF } = await import("jspdf");  // lazy import
+  const doc = new jsPDF();
+  const margin = 10;
+  const pageWidth = doc.internal.pageSize.getWidth() - margin * 2;
+  const lines = doc.splitTextToSize(text, pageWidth);
+  let y = margin;
+  lines.forEach((line) => {
+    if (y > doc.internal.pageSize.getHeight() - margin) {
+      doc.addPage();
+      y = margin;
     }
-    const doc = new jsPDF();
-    const margin = 10;
-    const pageWidth = doc.internal.pageSize.getWidth() - margin * 2;
-    const lines = doc.splitTextToSize(text, pageWidth);
-    let y = margin;
-    lines.forEach((line) => {
-      if (y > doc.internal.pageSize.getHeight() - margin) {
-        doc.addPage();
-        y = margin;
-      }
-      doc.text(line, margin, y);
-      y += 7;
-    });
-    doc.save("resume.pdf");
-  };
+    doc.text(line, margin, y);
+    y += 7;
+  });
+  doc.save("resume.pdf");
+};
 
-  const downloadCoverPDF = () => {
-    if (!coverLetter) {
-      alert("Please click 'Generate Cover Letter' first.");
-      return;
+const downloadCoverPDF = async () => {
+  if (!coverLetter) {
+    alert("Please click 'Generate Cover Letter' first.");
+    return;
+  }
+  const { jsPDF } = await import("jspdf");  // lazy import
+  const doc = new jsPDF();
+  const margin = 10;
+  const pageWidth = doc.internal.pageSize.getWidth() - margin * 2;
+  const lines = doc.splitTextToSize(coverLetter, pageWidth);
+  let y = margin;
+  lines.forEach((line) => {
+    if (y > doc.internal.pageSize.getHeight() - margin) {
+      doc.addPage();
+      y = margin;
     }
-    const doc = new jsPDF();
-    const margin = 10;
-    const pageWidth = doc.internal.pageSize.getWidth() - margin * 2;
-    const lines = doc.splitTextToSize(coverLetter, pageWidth);
-    let y = margin;
-    lines.forEach((line) => {
-      if (y > doc.internal.pageSize.getHeight() - margin) {
-        doc.addPage();
-        y = margin;
-      }
-      doc.text(line, margin, y);
-      y += 7;
-    });
-    doc.save("cover-letter.pdf");
-  };
+    doc.text(line, margin, y);
+    y += 7;
+  });
+  doc.save("cover-letter.pdf");
+};
 
   // ---------- API calls ----------
   const handleUpload = async () => {
