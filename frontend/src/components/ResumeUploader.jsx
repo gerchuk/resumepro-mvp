@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { API_BASE_URL } from "../lib/api";
+import { jsPDF } from "jspdf";
 
 export default function ResumeUploader() {
   const [file, setFile] = useState(null);
@@ -12,6 +13,54 @@ export default function ResumeUploader() {
   const [coverLetter, setCoverLetter] = useState(null);
   const [error, setError] = useState("");
 
+  // ---------- helpers: PDF exporters ----------
+  const downloadResumePDF = () => {
+    const text =
+      rewrite?.resume_text ||
+      (rewrite?.rewritten ? JSON.stringify(rewrite.rewritten, null, 2) : null);
+
+    if (!text) {
+      alert("Please click 'Rewrite Resume' first.");
+      return;
+    }
+    const doc = new jsPDF();
+    const margin = 10;
+    const pageWidth = doc.internal.pageSize.getWidth() - margin * 2;
+    const lines = doc.splitTextToSize(text, pageWidth);
+    let y = margin;
+    lines.forEach((line) => {
+      if (y > doc.internal.pageSize.getHeight() - margin) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.text(line, margin, y);
+      y += 7;
+    });
+    doc.save("resume.pdf");
+  };
+
+  const downloadCoverPDF = () => {
+    if (!coverLetter) {
+      alert("Please click 'Generate Cover Letter' first.");
+      return;
+    }
+    const doc = new jsPDF();
+    const margin = 10;
+    const pageWidth = doc.internal.pageSize.getWidth() - margin * 2;
+    const lines = doc.splitTextToSize(coverLetter, pageWidth);
+    let y = margin;
+    lines.forEach((line) => {
+      if (y > doc.internal.pageSize.getHeight() - margin) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.text(line, margin, y);
+      y += 7;
+    });
+    doc.save("cover-letter.pdf");
+  };
+
+  // ---------- API calls ----------
   const handleUpload = async () => {
     if (!file) { setError("Choose a file first"); return; }
     setError(""); setLoading(true);
@@ -86,7 +135,9 @@ export default function ResumeUploader() {
       <h1 className="text-2xl font-bold">ResumePro — Upload, Rewrite & Cover Letter</h1>
 
       <div className="p-4 border rounded">
-        <p className="text-sm text-gray-600">Upload a .txt resume to parse. Then rewrite or generate a cover letter.</p>
+        <p className="text-sm text-gray-600">
+          Upload .txt/.docx/.pdf, parse it, then rewrite and generate a cover letter. Export as PDF.
+        </p>
         <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} className="block my-3" />
         <button onClick={handleUpload} className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-60" disabled={loading}>
           {loading ? "Working..." : "Upload & Parse"}
@@ -105,9 +156,14 @@ export default function ResumeUploader() {
               <input placeholder="Target Job Title (optional)" value={clJobTitle} onChange={(e)=>setClJobTitle(e.target.value)} className="border p-2 w-full mb-2" />
               <input placeholder="Company (optional)" value={clCompany} onChange={(e)=>setClCompany(e.target.value)} className="border p-2 w-full mb-2" />
               <textarea placeholder="Paste Job Description (optional)" value={clJD} onChange={(e)=>setClJD(e.target.value)} className="border p-2 w-full h-24 mb-2" />
-              <button onClick={handleRewrite} className="px-3 py-2 bg-emerald-600 text-white rounded disabled:opacity-60" disabled={loading}>
-                {loading ? "Rewriting..." : "Rewrite Resume"}
-              </button>
+              <div className="flex gap-2">
+                <button onClick={handleRewrite} className="px-3 py-2 bg-emerald-600 text-white rounded disabled:opacity-60" disabled={loading}>
+                  {loading ? "Rewriting..." : "Rewrite Resume"}
+                </button>
+                <button onClick={downloadResumePDF} className="px-3 py-2 bg-gray-700 text-white rounded">
+                  Download Resume PDF
+                </button>
+              </div>
             </div>
 
             <div className="p-3 border rounded">
@@ -115,9 +171,14 @@ export default function ResumeUploader() {
               <input placeholder="Job Title (required)" value={clJobTitle} onChange={(e)=>setClJobTitle(e.target.value)} className="border p-2 w-full mb-2" />
               <input placeholder="Company (optional)" value={clCompany} onChange={(e)=>setClCompany(e.target.value)} className="border p-2 w-full mb-2" />
               <textarea placeholder="Paste Job Description (optional)" value={clJD} onChange={(e)=>setClJD(e.target.value)} className="border p-2 w-full h-24 mb-2" />
-              <button onClick={handleCover} className="px-3 py-2 bg-indigo-600 text-white rounded disabled:opacity-60" disabled={loading}>
-                {loading ? "Generating..." : "Generate Cover Letter"}
-              </button>
+              <div className="flex gap-2">
+                <button onClick={handleCover} className="px-3 py-2 bg-indigo-600 text-white rounded disabled:opacity-60" disabled={loading}>
+                  {loading ? "Generating..." : "Generate Cover Letter"}
+                </button>
+                <button onClick={downloadCoverPDF} className="px-3 py-2 bg-gray-700 text-white rounded">
+                  Download Cover Letter PDF
+                </button>
+              </div>
             </div>
           </div>
 
