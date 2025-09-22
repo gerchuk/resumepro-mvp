@@ -456,3 +456,39 @@ Sincerely,
 {name}
 {contact}"""
     return {"cover_letter": templ.strip(), "used_openai": False}
+
+
+
+# BEGIN CHUNK_UTILS
+MAX_TOK_TEXT = 12000  # coarse text limit per chunk (model-agnostic approximation)
+
+def _split_for_llm(text: str, max_len: int = MAX_TOK_TEXT):
+    """Split long resumes into manageable pieces at paragraph breaks."""
+    text = text or ""
+    if len(text) <= max_len:
+        return [text]
+    parts, buf, count = [], [], 0
+    for para in text.split("\n\n"):
+        if count + len(para) + 2 > max_len and buf:
+            parts.append("\n\n".join(buf))
+            buf, count = [], 0
+        buf.append(para)
+        count += len(para) + 2
+    if buf:
+        parts.append("\n\n".join(buf))
+    return parts
+
+def _fix_json_loose(s: str):
+    """Attempt to salvage JSON if the model returns extra text."""
+    s = (s or "").strip()
+    m = re.search(r"\{[\s\S]*\}$", s)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+# END CHUNK_UTILS
