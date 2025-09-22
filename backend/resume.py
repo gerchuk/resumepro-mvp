@@ -337,36 +337,80 @@ def local_rewrite(parsed: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 # ------------------------------ ROUTES ------------------------------
+
 @router.post("/parse", response_model=ParseResult)
 async def parse_resume(file: UploadFile = File(...)):
     text = extract_text_from_upload(file)
+    buckets = _sectionize(text)
 
-    # Try OpenAI structured extraction first
+    merged = {
+        "full_name": _guess_name(text),
+        "contact_info": _extract_contacts_from_header(text),
+        "summary": "",
+        "work_experience": [],
+        "education": [],
+        "skills": [],
+        "certifications": []
+    }
+
     if OPENAI_API_KEY:
-        sys_prompt = (
-            "Extract resume JSON with fields: full_name, contact_info, summary, "
-            "work_experience (array of {job_title, company, start_date, end_date, achievements[]}), "
-            "education, skills, certifications. Return ONLY JSON."
-        )
-        content = await gpt_chat(
-            [{"role": "system", "content": sys_prompt},
-             {"role": "user", "content": text}],
-            temperature=0.0
-        )
-        if content:
-            try:
-                return {"parsed": json.loads(content)}
-            except Exception:
-                # try to salvage trailing JSON
-                m = re.search(r"\{[\s\S]*\}$", (content or "").strip())
-                if m:
-                    try:
-                        return {"parsed": json.loads(m.group(0))}
-                    except Exception:
-                        pass
+        js = await _openai_extract_section("summary", _clean_lines(buckets.get("summary", [])))
+        if js and isinstance(js, dict) and js.get("summary"):
+            merged["summary"] = (js["summary"] or "").strip()
 
-    # Fallback: robust local heuristic
+        js = await _openai_extract_section("experience", _clean_lines(buckets.get("experience", [])))
+        if js and isinstance(js, dict):
+            w = js.get("work_experience") or []
+            if isinstance(w, list):
+                cleaned = []
+                for e in w:
+                    if not isinstance(e, dict): continue
+                    cleaned.append({
+                        "job_title": (e.get("job_title") or "").strip(),
+                        "company": (e.get("company") or "").strip(),
+                        "start_date": (e.get("start_date") or "").strip(),
+                        "end_date": (e.get("end_date") or "").strip(),
+                        "achievements": [a for a in (e.get("achievements") or []) if isinstance(a, str) and a.strip()]
+                    })
+                merged["work_experience"] = cleaned or merged["work_experience"]
+
+        js = await _openai_extract_section("education", _clean_lines(buckets.get("education", [])))
+        if js and isinstance(js, dict):
+            ed = js.get("education") or []
+            if isinstance(ed, list):
+                cleaned = []
+                for e in ed:
+                    if not isinstance(e, dict): continue
+                    cleaned.append({
+                        "institution": (e.get("institution") or "").strip()[:200],
+                        "degree": (e.get("degree") or "").strip()[:120],
+                        "year": (e.get("year") or "").strip()[:10]
+                    })
+                merged["education"] = cleaned or merged["education"]
+
+        js = await _openai_extract_section("skills", _clean_lines(buckets.get("skills", [])))
+        if js and isinstance(js, dict):
+            sk = js.get("skills") or []
+            if isinstance(sk, list):
+                merged["skills"] = [s for s in sk if isinstance(s, str) and s.strip()]
+
+        # Fallback to heuristic for any still-empty sections
+        if not merged["summary"] or not merged["work_experience"] or not merged["education"]:
+            h = heuristic_parse(text)
+            merged["summary"] = merged["summary"] or h.get("summary") or ""
+            if not merged["work_experience"] and h.get("work_experience"):
+                merged["work_experience"] = h["work_experience"]
+            if not merged["education"] and h.get("education"):
+                merged["education"] = h["education"]
+            if not merged["skills"] and h.get("skills"):
+                merged["skills"] = h["skills"]
+            if not merged["certifications"] and h.get("certifications"):
+                merged["certifications"] = h["certifications"]
+
+        return {"parsed": merged}
+
     return {"parsed": heuristic_parse(text)}
+
 
 @router.post("/rewrite", response_model=RewriteResponse)
 async def rewrite_resume(body: RewriteRequest):
@@ -492,3 +536,75 @@ def _fix_json_loose(s: str):
     except Exception:
         return None
 # END CHUNK_UTILS
+
+
+# BEGIN SECTION_AWARE
+SECTION_HEADERS = {
+    "experience": ("experience","work experience","professional experience","employment history","career history"),
+    "education": ("education","academic history","academics"),
+    "skills": ("skills","technical skills","key skills"),
+    "certifications": ("certifications","licenses","licences","certs"),
+    "projects": ("projects","selected projects","notable projects"),
+    "summary": ("summary","professional summary","profile","objective"),
+}
+
+def _sectionize(text: str):
+    \"\"\"Return dict of raw lines per section using robust header detection.\"\"\"
+    buckets = {k: [] for k in ["summary","experience","education","skills","certifications","projects"]}
+    current = "summary"
+    lines = text.replace("\\r\\n","\\n").replace("\\r","\\n").split("\\n")
+    for raw in lines:
+        line = raw.strip()
+        low = line.lower().strip(" :")
+        hit = None
+        for sec, names in SECTION_HEADERS.items():
+            if low in names:
+                hit = sec
+                break
+        if not hit and line.isupper() and len(line) <= 50:
+            if "EDUCATION" in line: hit="education"
+            elif "SKILL" in line: hit="skills"
+            elif "CERT" in line or "LICEN" in line: hit="certifications"
+            elif "PROJECT" in line: hit="projects"
+            elif "SUMMARY" in line or "PROFILE" in line or "OBJECTIVE" in line: hit="summary"
+            elif "EXPERIENCE" in line or "EMPLOY" in line or "CAREER" in line: hit="experience"
+        if hit:
+            current = hit
+            continue
+        buckets[current].append(raw)
+    return buckets
+
+def _clean_lines(block):
+    out = []
+    for l in block:
+        if l is None: continue
+        out.append(l.rstrip())
+    while out and not out[0].strip(): out.pop(0)
+    while out and not out[-1].strip(): out.pop()
+    return "\\n".join(out)
+
+async def _openai_extract_section(section_name: str, raw_text: str):
+    \"\"\"Ask OpenAI to extract ONLY the given section in strict JSON.\"\"\"
+    if not OPENAI_API_KEY or not raw_text.strip():
+        return None
+    sys = (
+        "Extract ONLY the requested section from a resume as strict JSON.\\n"
+        "Schema by section:\\n"
+        "- experience: { work_experience: [ { job_title, company, start_date, end_date, achievements[] } ] }\\n"
+        "- education:  { education: [ { institution, degree, year } ] }\\n"
+        "- skills:     { skills: [string] }\\n"
+        "- summary:    { summary: string }\\n"
+        "Return ONLY JSON. Do not invent facts. Use bullets as achievements where present."
+    )
+    user = f"Section: {section_name}\\n\\nText:\\n{raw_text[:15000]}"
+    content = await gpt_chat(
+        [{"role":"system","content":sys},{"role":"user","content":user}],
+        temperature=0.0
+    )
+    if not content: 
+        return None
+    try:
+        return _fix_json_loose(content)
+    except Exception:
+        return None
+# END SECTION_AWARE
