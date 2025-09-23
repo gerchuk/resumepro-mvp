@@ -548,63 +548,44 @@ SECTION_HEADERS = {
     "summary": ("summary","professional summary","profile","objective"),
 }
 
-def _sectionize(text: str):
-    \"\"\"Return dict of raw lines per section using robust header detection.\"\"\"
-    buckets = {k: [] for k in ["summary","experience","education","skills","certifications","projects"]}
-    current = "summary"
-    lines = text.replace("\\r\\n","\\n").replace("\\r","\\n").split("\\n")
-    for raw in lines:
-        line = raw.strip()
-        low = line.lower().strip(" :")
-        hit = None
-        for sec, names in SECTION_HEADERS.items():
-            if low in names:
-                hit = sec
-                break
-        if not hit and line.isupper() and len(line) <= 50:
-            if "EDUCATION" in line: hit="education"
-            elif "SKILL" in line: hit="skills"
-            elif "CERT" in line or "LICEN" in line: hit="certifications"
-            elif "PROJECT" in line: hit="projects"
-            elif "SUMMARY" in line or "PROFILE" in line or "OBJECTIVE" in line: hit="summary"
-            elif "EXPERIENCE" in line or "EMPLOY" in line or "CAREER" in line: hit="experience"
-        if hit:
-            current = hit
+def _sectionize(text: str) -> dict:
+    """
+    Try to split resume text into sections (Experience, Education, Skills, etc.)
+    """
+
+    # Normalize line endings and split into lines
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+    sections = {}
+    current_section = None
+    buffer = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
             continue
-        buckets[current].append(raw)
-    return buckets
 
-def _clean_lines(block):
-    out = []
-    for l in block:
-        if l is None: continue
-        out.append(l.rstrip())
-    while out and not out[0].strip(): out.pop(0)
-    while out and not out[-1].strip(): out.pop()
-    return "\\n".join(out)
+        # Detect new section headers (simple heuristic)
+        if stripped.lower() in [
+            "experience",
+            "work experience",
+            "education",
+            "skills",
+            "projects",
+            "summary",
+            "certifications",
+            "awards",
+        ]:
+            # Save previous section if any
+            if current_section and buffer:
+                sections[current_section] = "\n".join(buffer).strip()
+                buffer = []
+            current_section = stripped.lower()
+        else:
+            buffer.append(stripped)
 
-async def _openai_extract_section(section_name: str, raw_text: str):
-    \"\"\"Ask OpenAI to extract ONLY the given section in strict JSON.\"\"\"
-    if not OPENAI_API_KEY or not raw_text.strip():
-        return None
-    sys = (
-        "Extract ONLY the requested section from a resume as strict JSON.\\n"
-        "Schema by section:\\n"
-        "- experience: { work_experience: [ { job_title, company, start_date, end_date, achievements[] } ] }\\n"
-        "- education:  { education: [ { institution, degree, year } ] }\\n"
-        "- skills:     { skills: [string] }\\n"
-        "- summary:    { summary: string }\\n"
-        "Return ONLY JSON. Do not invent facts. Use bullets as achievements where present."
-    )
-    user = f"Section: {section_name}\\n\\nText:\\n{raw_text[:15000]}"
-    content = await gpt_chat(
-        [{"role":"system","content":sys},{"role":"user","content":user}],
-        temperature=0.0
-    )
-    if not content: 
-        return None
-    try:
-        return _fix_json_loose(content)
-    except Exception:
-        return None
-# END SECTION_AWARE
+    # Save the last section if any
+    if current_section and buffer:
+        sections[current_section] = "\n".join(buffer).strip()
+
+    return sections
